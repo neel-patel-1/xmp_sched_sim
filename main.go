@@ -12,8 +12,7 @@ type DeviceType int
 
 const (
 	Processor DeviceType = iota
-	Accelerator_0
-	Accelerator_1
+	Accelerator
 )
 
 type Phase struct {
@@ -39,7 +38,7 @@ func (m MultiPhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterfac
 			},
 			{
 				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
-				Devices: []DeviceType{Processor, Accelerator_0},
+				Devices: []DeviceType{Processor, Accelerator},
 			},
 		},
 		Current: 0,
@@ -56,9 +55,12 @@ func (m *MultiPhaseReq) GetServiceTime() float64 {
 
 type mpProcessor struct {
 	engine.Actor
-	reqDrain    blocks.RequestDrain
-	ctxCost     float64
-	offloadCost float64
+	reqDrain           blocks.RequestDrain
+	ctxCost            float64
+	offloadCost        float64
+	deviceType         DeviceType
+	speedup            float64
+	OutBoundProcessors []*mpProcessor
 }
 
 func (p *mpProcessor) SetReqDrain(rd blocks.RequestDrain) {
@@ -73,6 +75,24 @@ func (p *mpProcessor) SetOffloadCost(cost float64) {
 	p.offloadCost = cost
 }
 
+func (p *mpProcessor) GetDeviceType() DeviceType {
+	return Processor
+}
+
+func (p *mpProcessor) SetDeviceType(deviceType DeviceType) {
+	p.deviceType = deviceType
+}
+
+func (p *mpProcessor) SetSpeedup(speedup float64) {
+	p.speedup = speedup
+}
+
+func (prod *mpProcessor) LinkProducerToConsumer(cons *mpProcessor, q *blocks.Queue) {
+	cons.AddInQueue(q)
+	prod.AddOutQueue(q)
+	prod.OutBoundProcessors = append(prod.OutBoundProcessors, cons)
+}
+
 // RTCMPProcessor is a run to completion multi-phase processor
 type RTCMPProcessor struct {
 	mpProcessor
@@ -82,7 +102,8 @@ type RTCMPProcessor struct {
 func (p *RTCMPProcessor) Run() {
 	for {
 		req := p.ReadInQueue()
-		p.Wait(req.GetServiceTime() + p.ctxCost)
+		actualServiceTime := req.GetServiceTime() / p.speedup
+		p.Wait(actualServiceTime + p.ctxCost)
 		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
 			if multiPhaseReq.Current < len(multiPhaseReq.Phases)-1 {
 				// Move to the next phase
@@ -130,7 +151,7 @@ func single_core_deterministic(interarrival_time, service_time, duration float64
 	engine.Run(duration)
 }
 
-func chained_cores_multi_phase_deterministic(interarrival_time, service_time, duration float64) {
+func chained_cores_multi_phase_deterministic(interarrival_time, service_time, duration float64, speedup float64) {
 	engine.InitSim()
 
 	stats := &blocks.AllKeeper{}
@@ -146,15 +167,25 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 
 	// Create processors
 	p := &RTCMPProcessor{}
+	p.SetSpeedup(1)
+	p.SetOffloadCost(0)
+	p.SetDeviceType(Processor)
+	p.SetCtxCost(0)
 	p.AddInQueue(q)
-	p.AddOutQueue(q2)
+	// p.AddOutQueue(q2)
 	// p.SetReqDrain(stats)
 	engine.RegisterActor(p)
 
 	p2 := &RTCMPProcessor{}
-	p2.AddInQueue(q2)
+	// p2.AddInQueue(q2)
+	p2.SetDeviceType(Accelerator)
+	p2.SetCtxCost(0)
+	p2.SetSpeedup(speedup)
+	p2.SetOffloadCost(0)
 	p2.SetReqDrain(stats)
 	engine.RegisterActor(p2)
+
+	p.LinkProducerToConsumer(&p2.mpProcessor, q2)
 
 	g.AddOutQueue(q)
 
@@ -164,5 +195,5 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 
 func main() {
 	// single_core_deterministic(10, 10, 110)
-	chained_cores_multi_phase_deterministic(10, 10, 110)
+	chained_cores_multi_phase_deterministic(10, 10, 110, 2)
 }
