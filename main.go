@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/epfl-dcsl/schedsim/blocks"
 	"github.com/epfl-dcsl/schedsim/engine"
@@ -53,6 +54,53 @@ func (m *MultiPhaseReq) GetServiceTime() float64 {
 	return m.Phases[m.Current].GetServiceTime()
 }
 
+type mpProcessor struct {
+	engine.Actor
+	reqDrain    blocks.RequestDrain
+	ctxCost     float64
+	offloadCost float64
+}
+
+func (p *mpProcessor) SetReqDrain(rd blocks.RequestDrain) {
+	p.reqDrain = rd
+}
+
+func (p *mpProcessor) SetCtxCost(cost float64) {
+	p.ctxCost = cost
+}
+
+func (p *mpProcessor) SetOffloadCost(cost float64) {
+	p.offloadCost = cost
+}
+
+// RTCMPProcessor is a run to completion multi-phase processor
+type RTCMPProcessor struct {
+	mpProcessor
+}
+
+// Run is the main processor loop
+func (p *RTCMPProcessor) Run() {
+	for {
+		req := p.ReadInQueue()
+		p.Wait(req.GetServiceTime() + p.ctxCost)
+		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
+			if multiPhaseReq.Current < len(multiPhaseReq.Phases)-1 {
+				// Move to the next phase
+				multiPhaseReq.Current++
+				// Forward to the outgoing queue
+				p.WriteOutQueue(req)
+			} else {
+				// Last phase, terminate the request
+				p.reqDrain.TerminateReq(req)
+			}
+		} else {
+			// Handle non-multi-phase requests
+			log.Fatalf("Error: RTCMPProcessor received a non-multi-phase request")
+		}
+
+	}
+}
+
 func single_core_deterministic(interarrival_time, service_time, duration float64) {
 	engine.InitSim()
 
@@ -94,6 +142,20 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 	g.SetCreator(&MultiPhaseReqCreator{})
 
 	q := blocks.NewQueue()
+	q2 := blocks.NewQueue()
+
+	// Create processors
+	p := &RTCMPProcessor{}
+	p.AddInQueue(q)
+	p.AddOutQueue(q2)
+	// p.SetReqDrain(stats)
+	engine.RegisterActor(p)
+
+	p2 := &RTCMPProcessor{}
+	p2.AddInQueue(q2)
+	p2.SetReqDrain(stats)
+	engine.RegisterActor(p2)
+
 	g.AddOutQueue(q)
 
 	engine.RegisterActor(g)
