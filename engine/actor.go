@@ -17,6 +17,10 @@ func (a *Actor) getInQueues() []QueueInterface {
 	return a.inQueues
 }
 
+func (a *Actor) getOutQueues() []QueueInterface {
+	return a.outQueues
+}
+
 func (a *Actor) init(ch chan interface{}) {
 	a.toModel = ch
 	a.wakeUpCh = make(chan int)
