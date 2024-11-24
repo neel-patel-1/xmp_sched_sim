@@ -45,21 +45,25 @@ func (m MultiPhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterfac
 	}
 }
 
-type ThreePhaseReqCreator struct{}
+type ThreePhaseReqCreator struct {
+	phase_one_ratio   float64
+	phase_two_ratio   float64
+	phase_three_ratio float64
+}
 
 func (m ThreePhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterface {
 	return &MultiPhaseReq{
 		Phases: []Phase{
 			{
-				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
+				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime * m.phase_one_ratio},
 				Devices: []DeviceType{Processor},
 			},
 			{
-				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
+				Request: blocks.Request{InitTime: -1, ServiceTime: serviceTime * m.phase_two_ratio},
 				Devices: []DeviceType{Processor, Accelerator},
 			},
 			{
-				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
+				Request: blocks.Request{InitTime: -1, ServiceTime: serviceTime * m.phase_three_ratio}, // placeholder, users may want to track each phase's init time
 				Devices: []DeviceType{Processor},
 			},
 		},
@@ -231,6 +235,21 @@ func naive_chained_cores_single_queue_three_phase(interarrival_time, service_tim
 	// aq := blocks.NewQueue() // recirculated ax queue (second phase)
 	// pq := blocks.NewQueue() // recirculated proc queue (third phase)
 	engine.RegisterActor(g)
+
+	// create axCore
+	axCore := &RTCMPProcessor{}
+	axCore.SetSpeedup(2.0)
+	// create an in queue used by the axCore to re-enqueue the third phase back at the gpCore
+	for i := 0; i < num_cores; i++ {
+		aq := blocks.NewQueue()
+		axCore.AddInQueue(aq)
+		p := &RTCMPProcessor{}
+
+		p.AddOutQueue(aq)
+		p.SetSpeedup(1)
+		p.SetDeviceType(Processor)
+
+	}
 
 	engine.Run(duration)
 }
