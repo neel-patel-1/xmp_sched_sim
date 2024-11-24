@@ -53,6 +53,8 @@ func (m *MultiPhaseReq) GetServiceTime() float64 {
 	return m.Phases[m.Current].GetServiceTime()
 }
 
+type ForwardDecisionProcedure func(outProcs *[]*mpProcessor, req *MultiPhaseReq) *mpProcessor
+
 type mpProcessor struct {
 	engine.Actor
 	reqDrain           blocks.RequestDrain
@@ -61,6 +63,7 @@ type mpProcessor struct {
 	deviceType         DeviceType
 	speedup            float64
 	OutBoundProcessors []*mpProcessor
+	forwardFunc        ForwardDecisionProcedure
 }
 
 func (p *mpProcessor) SetReqDrain(rd blocks.RequestDrain) {
