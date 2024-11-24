@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/epfl-dcsl/schedsim/blocks"
-	"github.com/epfl-dcsl/schedsim/engine"
+	"github.com/neel-patel-1/xmp_sched_sim/blocks"
+	"github.com/neel-patel-1/xmp_sched_sim/engine"
 )
 
 type DeviceType int
@@ -90,10 +90,14 @@ func (p *mpProcessor) SetSpeedup(speedup float64) {
 	p.speedup = speedup
 }
 
+func (p *mpProcessor) GetInQueues() []*blocks.Queue {
+	return p.inQueues
+}
+
 func (prod *mpProcessor) LinkProducerToConsumer(cons *mpProcessor, q *blocks.Queue) {
+	prod.OutBoundProcessors = append(prod.OutBoundProcessors, cons)
 	cons.AddInQueue(q)
 	prod.AddOutQueue(q)
-	prod.OutBoundProcessors = append(prod.OutBoundProcessors, cons)
 }
 
 // RTCMPProcessor is a run to completion multi-phase processor
@@ -112,7 +116,8 @@ func (p *RTCMPProcessor) Run() {
 				// Move to the next phase
 				multiPhaseReq.Current++
 				// Forward to the outgoing queue
-				p.WriteOutQueue(req)
+				fmt.Println(p.outQueues)
+				println(p.OutBoundProcessors[0])
 			} else {
 				// Last phase, terminate the request
 				p.reqDrain.TerminateReq(req)
@@ -176,7 +181,9 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 	p.SetCtxCost(0)
 	p.AddInQueue(q)
 	// p.AddOutQueue(q2)
-	// p.SetReqDrain(stats)
+	p.forwardFunc = func(outProcs *[]*mpProcessor, req *MultiPhaseReq) *mpProcessor {
+		return (*outProcs)[0]
+	}
 	engine.RegisterActor(p)
 
 	p2 := &RTCMPProcessor{}
