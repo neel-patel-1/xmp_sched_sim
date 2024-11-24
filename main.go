@@ -53,7 +53,7 @@ func (m *MultiPhaseReq) GetServiceTime() float64 {
 	return m.Phases[m.Current].GetServiceTime()
 }
 
-type ForwardDecisionProcedure func(outProcs *[]*mpProcessor, req *MultiPhaseReq) *mpProcessor
+type ForwardDecisionProcedure func(outQueues []engine.QueueInterface, req *MultiPhaseReq) int
 
 type mpProcessor struct {
 	engine.Actor
@@ -90,12 +90,6 @@ func (p *mpProcessor) SetSpeedup(speedup float64) {
 	p.speedup = speedup
 }
 
-func (prod *mpProcessor) LinkProducerToConsumer(cons *mpProcessor, q *blocks.Queue) {
-	prod.OutBoundProcessors = append(prod.OutBoundProcessors, cons)
-	cons.AddInQueue(q)
-	prod.AddOutQueue(q)
-}
-
 // RTCMPProcessor is a run to completion multi-phase processor
 type RTCMPProcessor struct {
 	mpProcessor
@@ -112,8 +106,8 @@ func (p *RTCMPProcessor) Run() {
 				// Move to the next phase
 				multiPhaseReq.Current++
 				// Forward to the outgoing queue
-				fmt.Println(p.outQueues)
-				println(p.OutBoundProcessors[0])
+				outQueueIdx := p.forwardFunc(p.getOutQueues(), multiPhaseReq)
+				p.WriteOutQueueI(req, outQueueIdx)
 			} else {
 				// Last phase, terminate the request
 				p.reqDrain.TerminateReq(req)
@@ -176,22 +170,26 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 	p.SetDeviceType(Processor)
 	p.SetCtxCost(0)
 	p.AddInQueue(q)
-	// p.AddOutQueue(q2)
-	p.forwardFunc = func(outProcs *[]*mpProcessor, req *MultiPhaseReq) *mpProcessor {
-		return (*outProcs)[0]
-	}
-	engine.RegisterActor(p)
+	p.AddOutQueue(q2)
 
 	p2 := &RTCMPProcessor{}
-	// p2.AddInQueue(q2)
+	p2.AddInQueue(q2)
 	p2.SetDeviceType(Accelerator)
 	p2.SetCtxCost(0)
 	p2.SetSpeedup(speedup)
 	p2.SetOffloadCost(0)
 	p2.SetReqDrain(stats)
-	engine.RegisterActor(p2)
 
-	p.LinkProducerToConsumer(&p2.mpProcessor, q2)
+	p.forwardFunc = func(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
+		if req.Phases[req.Current].Devices[req.Current] == Processor {
+			return 0
+		} else {
+			return 1
+		}
+	}
+	engine.RegisterActor(p)
+
+	engine.RegisterActor(p2)
 
 	g.AddOutQueue(q)
 

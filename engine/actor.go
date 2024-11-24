@@ -13,11 +13,11 @@ type Actor struct {
 	outQueues []QueueInterface
 }
 
-func (a *Actor) getInQueues() []QueueInterface {
+func (a *Actor) GetInQueues() []QueueInterface {
 	return a.inQueues
 }
 
-func (a *Actor) getOutQueues() []QueueInterface {
+func (a *Actor) GetOutQueues() []QueueInterface {
 	return a.outQueues
 }
 
