@@ -106,7 +106,7 @@ func (p *RTCMPProcessor) Run() {
 				// Move to the next phase
 				multiPhaseReq.Current++
 				// Forward to the outgoing queue
-				outQueueIdx := p.forwardFunc(p.getOutQueues(), multiPhaseReq)
+				outQueueIdx := p.forwardFunc(p.GetOutQueues(), multiPhaseReq)
 				p.WriteOutQueueI(req, outQueueIdx)
 			} else {
 				// Last phase, terminate the request
@@ -181,11 +181,7 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 	p2.SetReqDrain(stats)
 
 	p.forwardFunc = func(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
-		if req.Phases[req.Current].Devices[req.Current] == Processor {
-			return 0
-		} else {
-			return 1
-		}
+		return 0
 	}
 	engine.RegisterActor(p)
 
