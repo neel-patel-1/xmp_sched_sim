@@ -45,6 +45,28 @@ func (m MultiPhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterfac
 	}
 }
 
+type ThreePhaseReqCreator struct{}
+
+func (m ThreePhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterface {
+	return &MultiPhaseReq{
+		Phases: []Phase{
+			{
+				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
+				Devices: []DeviceType{Processor},
+			},
+			{
+				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
+				Devices: []DeviceType{Processor, Accelerator},
+			},
+			{
+				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
+				Devices: []DeviceType{Processor},
+			},
+		},
+		Current: 0,
+	}
+}
+
 func (m *MultiPhaseReq) GetDelay() float64 {
 	return m.Phases[m.Current].GetDelay()
 }
@@ -190,6 +212,20 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 	g.AddOutQueue(q)
 
 	engine.RegisterActor(g)
+	engine.Run(duration)
+}
+
+func naive_chained_cores_multi_queue_three_phase(interarrival_time, service_time, duration float64, speedup float64) {
+	engine.InitSim()
+
+	stats := &blocks.AllKeeper{}
+	stats.SetName("Main Stats")
+	engine.InitStats(stats)
+
+	// Add generator
+	g := blocks.NewDDGenerator(interarrival_time, service_time)
+	g.SetCreator(&MultiPhaseReqCreator{})
+
 	engine.Run(duration)
 }
 
