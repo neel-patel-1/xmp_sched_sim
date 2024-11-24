@@ -3,7 +3,7 @@ package blocks
 import (
 	"math/rand"
 
-	"github.com/epfl-dcsl/schedsim/engine"
+	"github.com/neel-patel-1/xmp_sched_sim/engine"
 )
 
 // Request is the basic request type

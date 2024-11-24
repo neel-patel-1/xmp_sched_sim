@@ -5,7 +5,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/epfl-dcsl/schedsim/engine"
+	"github.com/neel-patel-1/xmp_sched_sim/engine"
 )
 
 const (
@@ -171,7 +171,7 @@ func (hdr *histogram) stddev() float64 {
 	return math.Sqrt(squareAvg - mean*mean)
 }
 
-//FIXME: I assume that in every bucket there will be max one percentile
+// FIXME: I assume that in every bucket there will be max one percentile
 func (hdr *histogram) getPercentiles() map[float64]float64 {
 	accum := make([]int, bUCKETCOUNT)
 	res := map[float64]float64{}

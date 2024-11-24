@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/epfl-dcsl/schedsim/engine"
+	"github.com/neel-patel-1/xmp_sched_sim/engine"
 )
 
 // Generator interface describes how a generator behaves when describing
@@ -134,7 +134,7 @@ func NewMMRandGenerator(waitLambda float64, serviceMu float64) *MMRandGenerator 
 	return g
 }
 
-//MLNGenerator is exponential waiting time lognormal service time generator
+// MLNGenerator is exponential waiting time lognormal service time generator
 // If multiple queues they are fed round robin
 type MLNGenerator struct {
 	rRGenerator

@@ -5,7 +5,7 @@ import (
 	"container/list"
 	//"sort"
 	//"fmt"
-	"github.com/epfl-dcsl/schedsim/engine"
+	"github.com/neel-patel-1/xmp_sched_sim/engine"
 )
 
 var count = 0

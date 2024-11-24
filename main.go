@@ -90,10 +90,6 @@ func (p *mpProcessor) SetSpeedup(speedup float64) {
 	p.speedup = speedup
 }
 
-func (p *mpProcessor) GetInQueues() []*blocks.Queue {
-	return p.inQueues
-}
-
 func (prod *mpProcessor) LinkProducerToConsumer(cons *mpProcessor, q *blocks.Queue) {
 	prod.OutBoundProcessors = append(prod.OutBoundProcessors, cons)
 	cons.AddInQueue(q)
