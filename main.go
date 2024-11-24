@@ -215,21 +215,28 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 	engine.Run(duration)
 }
 
-func naive_chained_cores_multi_queue_three_phase(interarrival_time, service_time, duration float64, speedup float64) {
+func naive_chained_cores_single_queue_three_phase(interarrival_time, service_time, duration float64, speedup float64,
+	num_cores int, num_accelerators int) {
 	engine.InitSim()
 
 	stats := &blocks.AllKeeper{}
 	stats.SetName("Main Stats")
 	engine.InitStats(stats)
 
-	// Add generator
+	// Add generator && set up dispatcher
 	g := blocks.NewDDGenerator(interarrival_time, service_time)
-	g.SetCreator(&MultiPhaseReqCreator{})
+	g.SetCreator(&ThreePhaseReqCreator{})
+	q := blocks.NewQueue() // arrival queue
+	g.AddOutQueue(q)
+	// aq := blocks.NewQueue() // recirculated ax queue (second phase)
+	// pq := blocks.NewQueue() // recirculated proc queue (third phase)
+	engine.RegisterActor(g)
 
 	engine.Run(duration)
 }
 
 func main() {
 	// single_core_deterministic(10, 10, 110)
-	chained_cores_multi_phase_deterministic(10, 10, 110, 2)
+	// chained_cores_multi_phase_deterministic(10, 10, 110, 2)
+	naive_chained_cores_single_queue_three_phase(10, 10, 110, 2, 2, 1)
 }
