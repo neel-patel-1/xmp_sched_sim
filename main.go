@@ -83,6 +83,8 @@ func (m *MultiPhaseReq) GetServiceTime() float64 {
 }
 
 type ForwardDecisionProcedure func(outQueues []engine.QueueInterface, req *MultiPhaseReq) int
+
+type gpCoreForwardDecisionProcedure func(p *GPCore, outQueues []engine.QueueInterface, req *MultiPhaseReq) int
 type QueueChooseProcedure func(inQueues []engine.QueueInterface) int
 
 type mpProcessor struct {
@@ -151,8 +153,11 @@ func (p *RTCMPProcessor) Run() {
 }
 
 // Block Until Success, Offloading Processor with three queues, one for each phase
-type gpCore struct {
+type GPCore struct {
 	mpProcessor
+	gpCoreForwardFunc gpCoreForwardDecisionProcedure
+	lastOutQueue      int
+	outboundMax       int
 }
 
 // determine the idx of the queue to read from <- parameterizable (maybe we just have one queue)
@@ -164,8 +169,9 @@ type gpCore struct {
 // otherwise
 // enqueue the request into the returned outqueue
 
-func (p *gpCore) Run() {
+func (p *GPCore) Run() {
 	for {
+	read_inqueue:
 		inQueueIdx := p.queueChooseFunc(p.GetInQueues())
 		req := p.ReadInQueueI(inQueueIdx)
 		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
@@ -179,6 +185,13 @@ func (p *gpCore) Run() {
 					p.Wait(multiPhaseReq.GetServiceTime())
 					multiPhaseReq.Current++
 				}
+
+				// Check if We just finished the last phase
+				if multiPhaseReq.Current >= len(multiPhaseReq.Phases) {
+					p.reqDrain.TerminateReq(req)
+					goto read_inqueue
+				}
+
 				// Forward to the outgoing queue
 				outQueueIdx := p.forwardFunc(p.GetOutQueues(), multiPhaseReq)
 				if outQueueIdx == -1 {
@@ -188,11 +201,12 @@ func (p *gpCore) Run() {
 					goto phase_exe
 				} else {
 					fmt.Printf("Enqueueing phase %v into outQueueIdx: %v\n", multiPhaseReq.Current, outQueueIdx)
+					p.Wait(p.offloadCost)
 					p.WriteOutQueueI(req, outQueueIdx)
 				}
 			} else {
 				// Last phase, terminate the request
-				p.reqDrain.TerminateReq(req)
+				log.Fatalf("Error: Received a request that has already completed all phases")
 			}
 		} else {
 			// Handle non-multi-phase requests
@@ -274,7 +288,7 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 	engine.Run(duration)
 }
 
-func naive_chained_cores_single_queue_three_phase(interarrival_time, service_time, duration float64, speedup float64,
+func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_time, duration float64, speedup float64,
 	num_cores int, num_accelerators int) {
 	engine.InitSim()
 
@@ -290,12 +304,35 @@ func naive_chained_cores_single_queue_three_phase(interarrival_time, service_tim
 	engine.RegisterActor(g)
 
 	// create axCore
-	axCore := &RTCMPProcessor{}
-	axCore.SetSpeedup(2.0)
-	// create an in queue used by the axCore to re-enqueue the third phase back at the gpCore
+	gpCore := &GPCore{}
+	gpCore.queueChooseFunc = func(inQueues []engine.QueueInterface) int {
+		for i, q := range inQueues {
+			if q.Len() > 0 {
+				return i
+			}
+		}
+		return -1
+	}
+	gpCore.gpCoreForwardFunc = func(p *GPCore, outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
+		// equally balance this GPCore's offloads across all available axCores
+		outQueue := (p.lastOutQueue + 1) % len(outQueues)
+
+		// if our preferred axCore is full, try the next one
+		for tried_queues := 0; outQueues[outQueue].Len() == p.outboundMax && tried_queues < len(outQueues); tried_queues++ {
+			p.Wait(p.offloadCost)
+			outQueue = (outQueue + 1) % len(outQueues)
+			if tried_queues == len(outQueues) {
+				// until we've tried all and need fallback
+				return -1
+			}
+		}
+		p.lastOutQueue = outQueue
+		return outQueue
+	}
+
+	// create an in queue used by the axCore to re-enqueue the third phase back at the GPCore
 	for i := 0; i < num_cores; i++ {
 		aq := blocks.NewQueue()
-		axCore.AddInQueue(aq)
 		p := &RTCMPProcessor{}
 
 		p.AddOutQueue(aq)
@@ -310,5 +347,5 @@ func naive_chained_cores_single_queue_three_phase(interarrival_time, service_tim
 func main() {
 	// single_core_deterministic(10, 10, 110)
 	chained_cores_multi_phase_deterministic(10, 10, 110, 2)
-	// naive_chained_cores_single_queue_three_phase(10, 10, 110, 2, 2, 1)
+	fallback_chained_cores_single_queue_three_phase(10, 10, 110, 2, 2, 1)
 }
