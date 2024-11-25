@@ -366,21 +366,15 @@ func firstNonEmptyQueue(inQueues []engine.QueueInterface) int {
 	return -1
 }
 
-func tryAllThenFallback(p *GPCore, outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
-	// equally balance this GPCore's offloads across all available axCores
-	outQueue := (p.lastOutQueue + 1) % len(outQueues)
-
-	// if our preferred axCore is full, try the next one
-	for tried_queues := 0; outQueues[outQueue].Len() == p.outboundMax && tried_queues < len(outQueues); tried_queues++ {
-		p.Wait(p.offloadCost)
-		outQueue = (outQueue + 1) % len(outQueues)
-		if tried_queues == len(outQueues) {
-			// until we've tried all and need fallback
-			return -1
-		}
+func tryAxCoreOutqueueThenFallback(p *GPCore, outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
+	if len(outQueues) > 1 {
+		log.Fatal("GPCore: More than one axCore is not supported")
 	}
-	p.lastOutQueue = outQueue
-	return outQueue
+
+	if outQueues[0].Len() < p.outboundMax {
+		return 0
+	}
+	return -1
 }
 
 func forwardToOffloader(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
@@ -407,7 +401,7 @@ func fallback_gpcore_core_three_phase_single(interarrival_time, service_time, du
 	gpCore := &GPCore{}
 	gpCore.outboundMax = axCoreQueueSize
 	gpCore.queueChooseFunc = firstNonEmptyQueue
-	gpCore.gpCoreForwardFunc = tryAllThenFallback
+	gpCore.gpCoreForwardFunc = tryAxCoreOutqueueThenFallback
 
 	//create axCore
 	axCore := &AXCore{}
@@ -485,7 +479,7 @@ func fallback_multi_gpcore_axcore_three_phase(duration float64, speedup float64,
 			gpCore := &GPCore{}
 			gpCore.outboundMax = axCoreQueueSize
 			gpCore.queueChooseFunc = firstNonEmptyQueue
-			gpCore.gpCoreForwardFunc = tryAllThenFallback
+			gpCore.gpCoreForwardFunc = tryAxCoreOutqueueThenFallback
 			gpCore.gpCoreIdx = j
 
 			// link post-processing queue of gpCore to output of axCore
