@@ -17,7 +17,7 @@ const (
 
 type Phase struct {
 	blocks.Request
-	Devices []DeviceType
+	Devices map[DeviceType]struct{}
 }
 
 type MultiPhaseReq struct {
@@ -34,11 +34,14 @@ func (m MultiPhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterfac
 		Phases: []Phase{
 			{
 				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
-				Devices: []DeviceType{Processor},
+				Devices: map[DeviceType]struct{}{Processor: {}},
 			},
 			{
 				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
-				Devices: []DeviceType{Processor, Accelerator},
+				Devices: map[DeviceType]struct{}{
+					Processor:   {},
+					Accelerator: {},
+				},
 			},
 		},
 		Current: 0,
@@ -56,15 +59,15 @@ func (m ThreePhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterfac
 		Phases: []Phase{
 			{
 				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime * m.phase_one_ratio},
-				Devices: []DeviceType{Processor},
+				Devices: map[DeviceType]struct{}{Processor: {}},
 			},
 			{
 				Request: blocks.Request{InitTime: -1, ServiceTime: serviceTime * m.phase_two_ratio},
-				Devices: []DeviceType{Processor, Accelerator},
+				Devices: map[DeviceType]struct{}{Processor: {}, Accelerator: {}},
 			},
 			{
 				Request: blocks.Request{InitTime: -1, ServiceTime: serviceTime * m.phase_three_ratio}, // placeholder, users may want to track each phase's init time
-				Devices: []DeviceType{Processor},
+				Devices: map[DeviceType]struct{}{Processor: {}},
 			},
 		},
 		Current: 0,
@@ -80,16 +83,17 @@ func (m *MultiPhaseReq) GetServiceTime() float64 {
 }
 
 type ForwardDecisionProcedure func(outQueues []engine.QueueInterface, req *MultiPhaseReq) int
+type QueueChooseProcedure func(inQueues []engine.QueueInterface) int
 
 type mpProcessor struct {
 	engine.Actor
-	reqDrain           blocks.RequestDrain
-	ctxCost            float64
-	offloadCost        float64
-	deviceType         DeviceType
-	speedup            float64
-	OutBoundProcessors []*mpProcessor
-	forwardFunc        ForwardDecisionProcedure
+	reqDrain        blocks.RequestDrain
+	ctxCost         float64
+	offloadCost     float64
+	deviceType      DeviceType
+	speedup         float64
+	forwardFunc     ForwardDecisionProcedure
+	queueChooseFunc QueueChooseProcedure
 }
 
 func (p *mpProcessor) SetReqDrain(rd blocks.RequestDrain) {
@@ -143,6 +147,57 @@ func (p *RTCMPProcessor) Run() {
 			log.Fatalf("Error: RTCMPProcessor received a non-multi-phase request")
 		}
 
+	}
+}
+
+// Block Until Success, Offloading Processor with three queues, one for each phase
+type gpCore struct {
+	mpProcessor
+}
+
+// determine the idx of the queue to read from <- parameterizable (maybe we just have one queue)
+// check the in queue corresponding to that idx
+// wait for the full service time of this phase and increment the phase counter
+// get the index of the outqueue to queue into
+// if the index is nil
+// 	wait for the full service time
+// otherwise
+// enqueue the request into the returned outqueue
+
+func (p *gpCore) Run() {
+	for {
+		inQueueIdx := p.queueChooseFunc(p.GetInQueues())
+		req := p.ReadInQueueI(inQueueIdx)
+		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
+			curPhase := multiPhaseReq.Current
+		phase_exe:
+			if curPhase < len(multiPhaseReq.Phases) {
+				// Check if the device is in the set
+				if _, exists := multiPhaseReq.Phases[multiPhaseReq.Current].Devices[Processor]; exists {
+					// Processor is in the set
+					fmt.Println("Processor is in the set")
+					p.Wait(multiPhaseReq.GetServiceTime())
+					multiPhaseReq.Current++
+				}
+				// Forward to the outgoing queue
+				outQueueIdx := p.forwardFunc(p.GetOutQueues(), multiPhaseReq)
+				if outQueueIdx == -1 {
+					fmt.Printf("Waiting for the full service time for phase %v\n", multiPhaseReq.Current)
+					p.Wait(multiPhaseReq.GetServiceTime())
+					multiPhaseReq.Current++
+					goto phase_exe
+				} else {
+					fmt.Printf("Enqueueing phase %v into outQueueIdx: %v\n", multiPhaseReq.Current, outQueueIdx)
+					p.WriteOutQueueI(req, outQueueIdx)
+				}
+			} else {
+				// Last phase, terminate the request
+				p.reqDrain.TerminateReq(req)
+			}
+		} else {
+			// Handle non-multi-phase requests
+			log.Fatalf("Error: NaiveOffloadingProcessor received a non-multi-phase request")
+		}
 	}
 }
 
@@ -229,11 +284,9 @@ func naive_chained_cores_single_queue_three_phase(interarrival_time, service_tim
 
 	// Add generator && set up dispatcher
 	g := blocks.NewDDGenerator(interarrival_time, service_time)
-	g.SetCreator(&ThreePhaseReqCreator{})
-	q := blocks.NewQueue() // arrival queue
+	g.SetCreator(&ThreePhaseReqCreator{phase_one_ratio: 0.1, phase_two_ratio: 0.6, phase_three_ratio: 0.3}) // Update-Filter-Histogram-1KB
+	q := blocks.NewQueue()                                                                                  // arrival queue
 	g.AddOutQueue(q)
-	// aq := blocks.NewQueue() // recirculated ax queue (second phase)
-	// pq := blocks.NewQueue() // recirculated proc queue (third phase)
 	engine.RegisterActor(g)
 
 	// create axCore
@@ -256,6 +309,6 @@ func naive_chained_cores_single_queue_three_phase(interarrival_time, service_tim
 
 func main() {
 	// single_core_deterministic(10, 10, 110)
-	// chained_cores_multi_phase_deterministic(10, 10, 110, 2)
-	naive_chained_cores_single_queue_three_phase(10, 10, 110, 2, 2, 1)
+	chained_cores_multi_phase_deterministic(10, 10, 110, 2)
+	// naive_chained_cores_single_queue_three_phase(10, 10, 110, 2, 2, 1)
 }
