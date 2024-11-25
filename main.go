@@ -355,8 +355,41 @@ func chained_cores_multi_phase_deterministic(interarrival_time, service_time, du
 	engine.Run(duration)
 }
 
+func firstNonEmptyQueue(inQueues []engine.QueueInterface) int {
+	// fmt.Println("GPCore: Choosing inQueue")
+	for i, q := range inQueues {
+		if q.Len() > 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+func tryAllThenFallback(p *GPCore, outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
+	// equally balance this GPCore's offloads across all available axCores
+	outQueue := (p.lastOutQueue + 1) % len(outQueues)
+
+	// if our preferred axCore is full, try the next one
+	for tried_queues := 0; outQueues[outQueue].Len() == p.outboundMax && tried_queues < len(outQueues); tried_queues++ {
+		p.Wait(p.offloadCost)
+		outQueue = (outQueue + 1) % len(outQueues)
+		if tried_queues == len(outQueues) {
+			// until we've tried all and need fallback
+			return -1
+		}
+	}
+	p.lastOutQueue = outQueue
+	return outQueue
+}
+
+func forwardToOffloader(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
+	// re-enqueue at the offloading gpCore
+	outQueueIdx := req.lastGPCoreIdx
+	return outQueueIdx
+}
+
 func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_time, duration float64, speedup float64,
-	num_cores int, num_accelerators int) {
+	num_cores int, num_accelerators int, axCoreQueueSize int) {
 	engine.InitSim()
 
 	stats := &blocks.AllKeeper{}
@@ -371,39 +404,13 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 
 	// create gpCore
 	gpCore := &GPCore{}
-	gpCore.queueChooseFunc = func(inQueues []engine.QueueInterface) int {
-		// fmt.Println("GPCore: Choosing inQueue")
-		for i, q := range inQueues {
-			if q.Len() > 0 {
-				return i
-			}
-		}
-		return -1
-	}
-	gpCore.gpCoreForwardFunc = func(p *GPCore, outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
-		// equally balance this GPCore's offloads across all available axCores
-		outQueue := (p.lastOutQueue + 1) % len(outQueues)
-
-		// if our preferred axCore is full, try the next one
-		for tried_queues := 0; outQueues[outQueue].Len() == p.outboundMax && tried_queues < len(outQueues); tried_queues++ {
-			p.Wait(p.offloadCost)
-			outQueue = (outQueue + 1) % len(outQueues)
-			if tried_queues == len(outQueues) {
-				// until we've tried all and need fallback
-				return -1
-			}
-		}
-		p.lastOutQueue = outQueue
-		return outQueue
-	}
+	gpCore.outboundMax = axCoreQueueSize
+	gpCore.queueChooseFunc = firstNonEmptyQueue
+	gpCore.gpCoreForwardFunc = tryAllThenFallback
 
 	//create axCore
 	axCore := &AXCore{}
-	axCore.forwardFunc = func(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
-		// re-enqueue at the offloading gpCore
-		outQueueIdx := req.lastGPCoreIdx
-		return outQueueIdx
-	}
+	axCore.forwardFunc = forwardToOffloader
 	axCore.speedup = speedup
 
 	// link post-processing queue of gpCore to output of axCore
@@ -434,5 +441,5 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 func main() {
 	// single_core_deterministic(10, 10, 110)
 	chained_cores_multi_phase_deterministic(10, 10, 110, 2)
-	fallback_chained_cores_single_queue_three_phase(10, 10, 110, 2, 2, 1)
+	fallback_chained_cores_single_queue_three_phase(10, 10, 110, 2, 2, 1, 32)
 }
