@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 
@@ -388,7 +389,7 @@ func forwardToOffloader(outQueues []engine.QueueInterface, req *MultiPhaseReq) i
 	return outQueueIdx
 }
 
-func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_time, duration float64, speedup float64,
+func fallback_gpcore_core_three_phase_single(interarrival_time, service_time, duration float64, speedup float64,
 	num_cores int, num_accelerators int, axCoreQueueSize int) {
 	engine.InitSim()
 
@@ -438,8 +439,102 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 	engine.Run(duration)
 }
 
+func fallback_multi_gpcore_axcore_three_phase(duration float64, speedup float64,
+	num_cores int, num_accelerators int, axCoreQueueSize int, lambda, mu float64, genType int,
+	phase_one_ratio float64, phase_two_ratio float64, phase_three_ratio float64) {
+
+	engine.InitSim()
+	stats := &blocks.AllKeeper{}
+	stats.SetName("Main Stats")
+	engine.InitStats(stats)
+
+	var g blocks.Generator
+	if genType == 0 {
+		g = blocks.NewMMRandGenerator(lambda, mu)
+	} else if genType == 1 {
+		g = blocks.NewMDRandGenerator(lambda, 1/mu)
+	} else if genType == 2 {
+		g = blocks.NewMBRandGenerator(lambda, 1, 10*(1/mu-0.9), 0.9)
+	} else if genType == 3 {
+		g = blocks.NewMBRandGenerator(lambda, 1, 1000*(1/mu-0.999), 0.999)
+	}
+	g.SetCreator(&ThreePhaseReqCreator{phase_one_ratio: phase_one_ratio, phase_two_ratio: phase_two_ratio, phase_three_ratio: phase_three_ratio})
+	q := blocks.NewQueue()
+	g.AddOutQueue(q)
+
+	// determine how many gpCores to an axCore
+	num_gpCores := num_cores / num_accelerators
+	if num_cores%num_accelerators != 0 {
+		log.Fatalf("Error: Number of cores must be divisible by the number of accelerators")
+	}
+
+	num_clusters := num_accelerators
+	for i := 0; i < num_clusters; i++ {
+		axQueue := blocks.NewQueue()
+
+		//create axCore
+		axCore := &AXCore{}
+		axCore.forwardFunc = forwardToOffloader
+		axCore.speedup = speedup
+		axCore.AddInQueue(axQueue)
+
+		for j := 0; j < num_gpCores; j++ {
+			postQueue := blocks.NewQueue()
+
+			// create gpCore
+			gpCore := &GPCore{}
+			gpCore.outboundMax = axCoreQueueSize
+			gpCore.queueChooseFunc = firstNonEmptyQueue
+			gpCore.gpCoreForwardFunc = tryAllThenFallback
+			gpCore.gpCoreIdx = j
+
+			// link post-processing queue of gpCore to output of axCore
+			axCore.AddOutQueue(postQueue)
+			gpCore.gpCoreIdx = j
+			gpCore.AddInQueue(postQueue)
+			gpCore.SetReqDrain(stats)
+
+			gpCore.AddOutQueue(axQueue)
+
+			gpCore.AddInQueue(q)
+
+			engine.RegisterActor(gpCore)
+		}
+
+		engine.RegisterActor(axCore)
+	}
+
+	engine.RegisterActor(g)
+	engine.Run(duration)
+
+}
+
 func main() {
-	// single_core_deterministic(10, 10, 110)
-	chained_cores_multi_phase_deterministic(10, 10, 110, 2)
-	fallback_chained_cores_single_queue_three_phase(10, 10, 110, 2, 2, 1, 32)
+	var topo = flag.Int("topo", 0, "topology selector")
+	var mu = flag.Float64("mu", 0.02, "mu service rate") // default 50usec
+	var lambda = flag.Float64("lambda", 0.005, "lambda poisson interarrival")
+	var genType = flag.Int("genType", 0, "type of generator")
+	var duration = flag.Float64("duration", 10000000, "experiment duration")
+	var bufferSize = flag.Int("buffersize", 32, "size of each axCore's buffer")
+	var num_cores = flag.Int("num_cores", 16, "number of cores")
+	var num_accelerators = flag.Int("num_accelerators", 8, "number of accelerators")
+
+	var phase_one_ratio = flag.Float64("phase_one_ratio", 0.25, "phase one ratio")
+	var phase_two_ratio = flag.Float64("phase_two_ratio", 0.5, "phase two ratio")
+	var phase_three_ratio = flag.Float64("phase_three_ratio", 0.25, "phase three ratio")
+
+	flag.Parse()
+	fmt.Printf("Selected topology: %v\n", *topo)
+
+	if *topo == 0 {
+		// single_core_deterministic(*lambda, *mu, *duration)
+		chained_cores_multi_phase_deterministic(*lambda, *mu, *duration, 2)
+	}
+	if *topo == 1 {
+		fallback_gpcore_core_three_phase_single(*lambda, *mu, *duration, 2, *num_cores, *num_accelerators, *bufferSize)
+	}
+	if *topo == 2 {
+		fallback_multi_gpcore_axcore_three_phase(*duration, 2, *num_cores, *num_accelerators, *bufferSize, *lambda, *mu, *genType, *phase_one_ratio, *phase_two_ratio, *phase_three_ratio)
+	}
+
 }
