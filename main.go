@@ -76,7 +76,7 @@ func (m ThreePhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterfac
 }
 
 func (m *MultiPhaseReq) GetDelay() float64 {
-	return m.Phases[m.Current].GetDelay()
+	return engine.GetTime() - m.Phases[0].InitTime
 }
 
 func (m *MultiPhaseReq) GetServiceTime() float64 {
@@ -168,16 +168,16 @@ type AXCore struct {
 func (p *AXCore) Run() {
 	for {
 		req := p.ReadInQueue()
-		log.Printf("AXCore: Read request %v", req)
+		//logPrintf("AXCore: Read request %v", req)
 		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
 			curPhase := multiPhaseReq.Current
-			log.Printf("AXCore: Starting phase %v", curPhase)
+			//logPrintf("AXCore: Starting phase %v", curPhase)
 			if _, exists := multiPhaseReq.Phases[curPhase].Devices[Accelerator]; exists {
 				// Accelerator is in the set
 				actualServiceTime := req.GetServiceTime() / p.speedup
 				p.Wait(actualServiceTime)
 				multiPhaseReq.Current++
-				log.Printf("AXCore: Finished phase %v", curPhase)
+				//logPrintf("AXCore: Finished phase %v", curPhase)
 			} else {
 				log.Fatalf("Error: Accelerator is not in the set")
 			}
@@ -224,8 +224,8 @@ func (p *GPCore) Run() {
 		} else {
 			req = p.ReadInQueueI(inQueueIdx)
 		}
-		fmt.Println("GPCore: Read from inQueueIdx: ", inQueueIdx)
-		fmt.Println(req)
+		//fmt.Println("GPCore: Read from inQueueIdx: ", inQueueIdx)
+		//fmt.Println(req)
 		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
 			curPhase := multiPhaseReq.Current
 		phase_exe:
@@ -236,14 +236,14 @@ func (p *GPCore) Run() {
 					p.Wait(multiPhaseReq.GetServiceTime())
 					multiPhaseReq.Current++
 					multiPhaseReq.lastGPCoreIdx = p.gpCoreIdx
-					fmt.Printf("GPCore: Finished phase %v\n", curPhase)
+					//fmt.Printf("GPCore: Finished phase %v\n", curPhase)
 				} else {
 					log.Fatalf("Error: Processor is not in the set")
 				}
 
 				// Check if We just finished the last phase
 				if multiPhaseReq.Current >= len(multiPhaseReq.Phases) {
-					fmt.Println("GPCore: Last phase, terminating request")
+					//fmt.Println("GPCore: Last phase, terminating request")
 					p.reqDrain.TerminateReq(req)
 					goto read_inqueue
 				}
@@ -251,12 +251,12 @@ func (p *GPCore) Run() {
 				// Forward to the outgoing queue
 				outQueueIdx := p.gpCoreForwardFunc(p, p.GetOutQueues(), multiPhaseReq)
 				if outQueueIdx == -1 {
-					fmt.Printf("Waiting for the full service time for phase %v\n", multiPhaseReq.Current)
+					//fmt.Printf("Waiting for the full service time for phase %v\n", multiPhaseReq.Current)
 					p.Wait(multiPhaseReq.GetServiceTime())
 					multiPhaseReq.Current++
 					goto phase_exe
 				} else {
-					fmt.Printf("Enqueueing phase %v into outQueueIdx: %v\n", multiPhaseReq.Current, outQueueIdx)
+					//fmt.Printf("Enqueueing phase %v into outQueueIdx: %v\n", multiPhaseReq.Current, outQueueIdx)
 					p.Wait(p.offloadCost)
 					p.WriteOutQueueI(req, outQueueIdx)
 				}
@@ -266,7 +266,7 @@ func (p *GPCore) Run() {
 			}
 		} else {
 			// Handle non-multi-phase requests
-			fmt.Println(multiPhaseReq)
+			//fmt.Println(multiPhaseReq)
 			log.Fatalf("Error: NaiveOffloadingProcessor received a non-multi-phase request")
 
 		}
@@ -365,8 +365,9 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 
 	// Add generator && set up dispatcher
 	g := blocks.NewDDGenerator(interarrival_time, service_time)
-	g.SetCreator(&ThreePhaseReqCreator{phase_one_ratio: 0.1, phase_two_ratio: 0.6, phase_three_ratio: 0.3}) // Update-Filter-Histogram-1KB
-	q := blocks.NewQueue()                                                                                  // arrival queue
+	// g.SetCreator(&ThreePhaseReqCreator{phase_one_ratio: 0.1, phase_two_ratio: 0.6, phase_three_ratio: 0.3}) // Update-Filter-Histogram-1KB
+	g.SetCreator(&ThreePhaseReqCreator{phase_one_ratio: 0.25, phase_two_ratio: 0.5, phase_three_ratio: 0.25}) // dummy for testing
+	q := blocks.NewQueue()                                                                                    // arrival queue
 
 	// create gpCore
 	gpCore := &GPCore{}
@@ -411,6 +412,7 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 	axCore.AddOutQueue(postQueue)
 	gpCore.gpCoreIdx = 0         // indicates the outgoing queue index to use to re-enqueue at this gpCore
 	gpCore.AddInQueue(postQueue) // post-processing input queue (produced by axCore)
+	gpCore.SetReqDrain(stats)
 
 	axQueue := blocks.NewQueue()
 	gpCore.AddOutQueue(axQueue) // axCore input queue (produced by gpCore)
