@@ -171,6 +171,7 @@ func (p *AXCore) Run() {
 		log.Printf("AXCore: Read request %v", req)
 		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
 			curPhase := multiPhaseReq.Current
+			log.Printf("AXCore: Starting phase %v", curPhase)
 			if _, exists := multiPhaseReq.Phases[curPhase].Devices[Accelerator]; exists {
 				// Accelerator is in the set
 				actualServiceTime := req.GetServiceTime() / p.speedup
@@ -402,6 +403,7 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 		outQueueIdx := req.lastGPCoreIdx
 		return outQueueIdx
 	}
+	axCore.speedup = speedup
 
 	// link post-processing queue of gpCore to output of axCore
 	postQueue := blocks.NewQueue()
@@ -419,7 +421,7 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 	engine.RegisterActor(gpCore)
 	engine.RegisterActor(axCore)
 
-	g.AddOutQueue(axQueue)
+	g.AddOutQueue(q)
 	engine.RegisterActor(g)
 
 	// create an in queue used by the axCore to re-enqueue the third phase back at the GPCore
