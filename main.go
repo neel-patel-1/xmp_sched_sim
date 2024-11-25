@@ -22,8 +22,9 @@ type Phase struct {
 
 type MultiPhaseReq struct {
 	blocks.Request
-	Phases  []Phase
-	Current int
+	Phases        []Phase
+	Current       int
+	lastGPCoreIdx int
 }
 
 type MultiPhaseReqCreator struct{}
@@ -152,12 +153,53 @@ func (p *RTCMPProcessor) Run() {
 	}
 }
 
+type AXCore struct {
+	mpProcessor
+}
+
+// axCore main loop:
+//
+//	check in queue
+//	wait for the full service time of this phase
+//	check the coreid of the request to know which in queue to re-enqueue
+//	wait for the notification overhead time
+//
+// write to the outqueue at offset coreid to re-enqueue at the offloading core
+func (p *AXCore) Run() {
+	for {
+		req := p.ReadInQueue()
+		log.Printf("AXCore: Read request %v", req)
+		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
+			curPhase := multiPhaseReq.Current
+			if _, exists := multiPhaseReq.Phases[curPhase].Devices[Accelerator]; exists {
+				// Accelerator is in the set
+				actualServiceTime := req.GetServiceTime() / p.speedup
+				p.Wait(actualServiceTime)
+				multiPhaseReq.Current++
+				log.Printf("AXCore: Finished phase %v", curPhase)
+			} else {
+				log.Fatalf("Error: Accelerator is not in the set")
+			}
+			if multiPhaseReq.Current >= len(multiPhaseReq.Phases) {
+				log.Fatalf("Error: Accelerator cannot terminate a request")
+			}
+			// Forward to the outgoing queue
+			outQueueIdx := p.forwardFunc(p.GetOutQueues(), multiPhaseReq)
+			p.WriteOutQueueI(req, outQueueIdx)
+		} else {
+			// Handle non-multi-phase requests
+			log.Fatalf("Error: RTCMPProcessor received a non-multi-phase request")
+		}
+	}
+}
+
 // Block Until Success, Offloading Processor with three queues, one for each phase
 type GPCore struct {
 	mpProcessor
 	gpCoreForwardFunc gpCoreForwardDecisionProcedure
 	lastOutQueue      int
 	outboundMax       int
+	gpCoreIdx         int
 }
 
 // determine the idx of the queue to read from <- parameterizable (maybe we just have one queue)
@@ -172,8 +214,17 @@ type GPCore struct {
 func (p *GPCore) Run() {
 	for {
 	read_inqueue:
+		var req engine.ReqInterface
 		inQueueIdx := p.queueChooseFunc(p.GetInQueues())
-		req := p.ReadInQueueI(inQueueIdx)
+		if inQueueIdx == -1 {
+			// dequeue from first non-empty
+			req, inQueueIdx = p.ReadInQueues()
+			// fmt.Println("GPCore routine said no, so we ReadInQueues -- Read from inQueueIdx: ", inQueueIdx)
+		} else {
+			req = p.ReadInQueueI(inQueueIdx)
+		}
+		fmt.Println("GPCore: Read from inQueueIdx: ", inQueueIdx)
+		fmt.Println(req)
 		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
 			curPhase := multiPhaseReq.Current
 		phase_exe:
@@ -181,19 +232,23 @@ func (p *GPCore) Run() {
 				// Check if the device is in the set
 				if _, exists := multiPhaseReq.Phases[multiPhaseReq.Current].Devices[Processor]; exists {
 					// Processor is in the set
-					fmt.Println("Processor is in the set")
 					p.Wait(multiPhaseReq.GetServiceTime())
 					multiPhaseReq.Current++
+					multiPhaseReq.lastGPCoreIdx = p.gpCoreIdx
+					fmt.Printf("GPCore: Finished phase %v\n", curPhase)
+				} else {
+					log.Fatalf("Error: Processor is not in the set")
 				}
 
 				// Check if We just finished the last phase
 				if multiPhaseReq.Current >= len(multiPhaseReq.Phases) {
+					fmt.Println("GPCore: Last phase, terminating request")
 					p.reqDrain.TerminateReq(req)
 					goto read_inqueue
 				}
 
 				// Forward to the outgoing queue
-				outQueueIdx := p.forwardFunc(p.GetOutQueues(), multiPhaseReq)
+				outQueueIdx := p.gpCoreForwardFunc(p, p.GetOutQueues(), multiPhaseReq)
 				if outQueueIdx == -1 {
 					fmt.Printf("Waiting for the full service time for phase %v\n", multiPhaseReq.Current)
 					p.Wait(multiPhaseReq.GetServiceTime())
@@ -210,9 +265,20 @@ func (p *GPCore) Run() {
 			}
 		} else {
 			// Handle non-multi-phase requests
+			fmt.Println(multiPhaseReq)
 			log.Fatalf("Error: NaiveOffloadingProcessor received a non-multi-phase request")
+
 		}
 	}
+}
+
+func priqueue_choose(inQueues []engine.QueueInterface) int {
+	for i, q := range inQueues {
+		if q.Len() > 0 {
+			return i
+		}
+	}
+	return -1
 }
 
 func single_core_deterministic(interarrival_time, service_time, duration float64) {
@@ -300,12 +366,11 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 	g := blocks.NewDDGenerator(interarrival_time, service_time)
 	g.SetCreator(&ThreePhaseReqCreator{phase_one_ratio: 0.1, phase_two_ratio: 0.6, phase_three_ratio: 0.3}) // Update-Filter-Histogram-1KB
 	q := blocks.NewQueue()                                                                                  // arrival queue
-	g.AddOutQueue(q)
-	engine.RegisterActor(g)
 
-	// create axCore
+	// create gpCore
 	gpCore := &GPCore{}
 	gpCore.queueChooseFunc = func(inQueues []engine.QueueInterface) int {
+		// fmt.Println("GPCore: Choosing inQueue")
 		for i, q := range inQueues {
 			if q.Len() > 0 {
 				return i
@@ -330,16 +395,34 @@ func fallback_chained_cores_single_queue_three_phase(interarrival_time, service_
 		return outQueue
 	}
 
-	// create an in queue used by the axCore to re-enqueue the third phase back at the GPCore
-	for i := 0; i < num_cores; i++ {
-		aq := blocks.NewQueue()
-		p := &RTCMPProcessor{}
-
-		p.AddOutQueue(aq)
-		p.SetSpeedup(1)
-		p.SetDeviceType(Processor)
-
+	//create axCore
+	axCore := &AXCore{}
+	axCore.forwardFunc = func(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
+		// re-enqueue at the offloading gpCore
+		outQueueIdx := req.lastGPCoreIdx
+		return outQueueIdx
 	}
+
+	// link post-processing queue of gpCore to output of axCore
+	postQueue := blocks.NewQueue()
+	// add this one first -- highest priority
+	axCore.AddOutQueue(postQueue)
+	gpCore.gpCoreIdx = 0         // indicates the outgoing queue index to use to re-enqueue at this gpCore
+	gpCore.AddInQueue(postQueue) // post-processing input queue (produced by axCore)
+
+	axQueue := blocks.NewQueue()
+	gpCore.AddOutQueue(axQueue) // axCore input queue (produced by gpCore)
+	axCore.AddInQueue(axQueue)  // axCore input queue (produced by gpCore)
+
+	gpCore.AddInQueue(q) // pre-processing queue (produced by load gen)
+
+	engine.RegisterActor(gpCore)
+	engine.RegisterActor(axCore)
+
+	g.AddOutQueue(axQueue)
+	engine.RegisterActor(g)
+
+	// create an in queue used by the axCore to re-enqueue the third phase back at the GPCore
 
 	engine.Run(duration)
 }
