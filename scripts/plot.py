@@ -15,11 +15,11 @@ def parse_data(file_path):
 
     return lambda_values, avg_latency, percentile_99_latency
 
-def plot_data(directory):
+def plot_data(directory, file_suffix):
     plt.figure(figsize=(10, 5))
 
     for filename in os.listdir(directory):
-        if filename.endswith(".txt"):
+        if filename.endswith(file_suffix + ".txt"):
             file_path = os.path.join(directory, filename)
             lambda_values, avg_latency, percentile_99_latency = parse_data(file_path)
 
@@ -48,18 +48,18 @@ def plot_data(directory):
 
             # Plot lambda vs. average latency
             plt.subplot(1, 2, 1)
-            plt.plot(filtered_lambda_values, filtered_avg_latency, marker='o', label=filename.replace('.txt', ''))
-            plt.xlabel('Lambda')
-            plt.ylabel('Average Latency')
-            plt.title('Lambda vs. Average Latency')
+            plt.plot(filtered_lambda_values, filtered_avg_latency, marker='o', label=filename.replace(f'{file_suffix}.txt', ''))
+            plt.xlabel('Load (MRPS)')
+            plt.ylabel('Average Latency (µs)')
+            # plt.title('Lambda vs. Average Latency')
             plt.ylim(bottom=0, top=20 * zero_load_latency)
 
             # Plot lambda vs. 99th percentile latency
             plt.subplot(1, 2, 2)
-            plt.plot(filtered_lambda_values, filtered_percentile_99_latency, marker='o', label=filename)
-            plt.xlabel('Lambda')
-            plt.ylabel('99th Percentile Latency')
-            plt.title('Lambda vs. 99th Percentile Latency')
+            plt.plot(filtered_lambda_values, filtered_percentile_99_latency, marker='o', label=filename.replace(f'{file_suffix}.txt', ''))
+            plt.xlabel('Load(MRPS)')
+            plt.ylabel('99th Percentile Latency (µs)')
+            # plt.title('Lambda vs. 99th Percentile Latency')
             plt.ylim(bottom=0, top=20 * zero_load_latency)
 
     plt.subplot(1, 2, 1)
@@ -72,6 +72,7 @@ def plot_data(directory):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Plot Lambda vs. Latency from data files in a directory.')
     parser.add_argument('directory', type=str, help='Path to the directory containing data files')
+    parser.add_argument('suffix', type=str, nargs='?', default='', help='Suffix of the files to be plotted (without .txt)')
     args = parser.parse_args()
 
-    plot_data(args.directory)
+    plot_data(args.directory, args.suffix)
