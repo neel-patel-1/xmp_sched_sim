@@ -17,11 +17,10 @@ metrics = ['Count', 'Stolen', 'AVG', 'STDDev',
 
 
 def run(num_cores, num_accelerators, bufferSize, mu, gen_type, phase_one_ratio, phase_two_ratio, phase_three_ratio, speedup,
-        gpcore_offload_style, axcore_notify_recipient, gpcore_input_queue_selector, name):
+        gpcore_offload_style, axcore_notify_recipient, gpcore_input_queue_selector, duration, name):
     '''
     mu in us
     '''
-    duration = 100000
     service_time_per_core_us = ((1 / mu) * .33)
     rps_capacity_per_core = 1 / service_time_per_core_us * 1000.0 * 1000.0
     total_rps_capacity = rps_capacity_per_core * num_cores

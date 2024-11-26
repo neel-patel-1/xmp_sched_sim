@@ -49,16 +49,16 @@ def plot_data(directory, file_suffix):
             # Plot lambda vs. average latency
             plt.subplot(1, 2, 1)
             plt.plot(filtered_lambda_values, filtered_avg_latency, marker='o', label=filename.replace(f'{file_suffix}.txt', ''))
-            plt.xlabel('Load')
-            plt.ylabel('Average Latency')
+            plt.xlabel('Load (MRPS)')
+            plt.ylabel('Average Latency (µs)')
             # plt.title('Lambda vs. Average Latency')
             plt.ylim(bottom=0, top=20 * zero_load_latency)
 
             # Plot lambda vs. 99th percentile latency
             plt.subplot(1, 2, 2)
             plt.plot(filtered_lambda_values, filtered_percentile_99_latency, marker='o', label=filename.replace(f'{file_suffix}.txt', ''))
-            plt.xlabel('Lambda')
-            plt.ylabel('99th Percentile Latency')
+            plt.xlabel('Load(MRPS)')
+            plt.ylabel('99th Percentile Latency (µs)')
             # plt.title('Lambda vs. 99th Percentile Latency')
             plt.ylim(bottom=0, top=20 * zero_load_latency)
 
