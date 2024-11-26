@@ -56,7 +56,7 @@ def plot_data(directory):
 
             # Plot lambda vs. 99th percentile latency
             plt.subplot(1, 2, 2)
-            plt.plot(filtered_lambda_values, filtered_percentile_99_latency, marker='o', label=filename)
+            plt.plot(filtered_lambda_values, filtered_percentile_99_latency, marker='o', label=filename.replace('.txt', ''))
             plt.xlabel('Lambda')
             plt.ylabel('99th Percentile Latency')
             plt.title('Lambda vs. 99th Percentile Latency')
