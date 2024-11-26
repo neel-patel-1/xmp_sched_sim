@@ -16,7 +16,7 @@ metrics = ['Count', 'Stolen', 'AVG', 'STDDev',
            '50th', '90th', '95th', '99th', 'Reqs/time_unit']
 
 
-def run(num_cores, num_accelerators, bufferSize, topo, mu, gen_type, phase_one_ratio, phase_two_ratio, phase_three_ratio, speedup):
+def run(num_cores, num_accelerators, bufferSize, topo, mu, gen_type, phase_one_ratio, phase_two_ratio, phase_three_ratio, speedup, name):
     '''
     mu in us
     '''
@@ -27,7 +27,7 @@ def run(num_cores, num_accelerators, bufferSize, topo, mu, gen_type, phase_one_r
     load_levels = [i * 0.1 for i in range(1, 11)]  # Load levels from 0.1 to 1.0
     injected_rps = [load_lvl * total_rps_capacity for load_lvl in load_levels]
     lambdas = [rps / 1000.0 / 1000.0 for rps in injected_rps]
-    res_file = "out.txt"
+    res_file = f"{name}.txt"
     saturation_threshold = 100 * service_time_per_core_us  # Define saturation threshold
 
     with open(res_file, 'w') as f:

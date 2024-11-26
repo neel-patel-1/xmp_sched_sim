@@ -9,86 +9,6 @@ import (
 	"github.com/neel-patel-1/xmp_sched_sim/engine"
 )
 
-type DeviceType int
-
-const (
-	Processor DeviceType = iota
-	Accelerator
-)
-
-type Phase struct {
-	blocks.Request
-	Devices map[DeviceType]struct{}
-}
-
-type MultiPhaseReq struct {
-	blocks.Request
-	Phases        []Phase
-	Current       int
-	lastGPCoreIdx int
-}
-
-type MultiPhaseReqCreator struct{}
-
-// NewRequest returns a new MultiPhaseReq
-func (m MultiPhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterface {
-	return &MultiPhaseReq{
-		Phases: []Phase{
-			{
-				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
-				Devices: map[DeviceType]struct{}{Processor: {}},
-			},
-			{
-				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime},
-				Devices: map[DeviceType]struct{}{
-					Processor:   {},
-					Accelerator: {},
-				},
-			},
-		},
-		Current: 0,
-	}
-}
-
-type ThreePhaseReqCreator struct {
-	phase_one_ratio   float64
-	phase_two_ratio   float64
-	phase_three_ratio float64
-}
-
-func (m ThreePhaseReqCreator) NewRequest(serviceTime float64) engine.ReqInterface {
-	return &MultiPhaseReq{
-		Phases: []Phase{
-			{
-				Request: blocks.Request{InitTime: engine.GetTime(), ServiceTime: serviceTime * m.phase_one_ratio},
-				Devices: map[DeviceType]struct{}{Processor: {}},
-			},
-			{
-				Request: blocks.Request{InitTime: -1, ServiceTime: serviceTime * m.phase_two_ratio},
-				Devices: map[DeviceType]struct{}{Processor: {}, Accelerator: {}},
-			},
-			{
-				Request: blocks.Request{InitTime: -1, ServiceTime: serviceTime * m.phase_three_ratio}, // placeholder, users may want to track each phase's init time
-				Devices: map[DeviceType]struct{}{Processor: {}},
-			},
-		},
-		Current: 0,
-	}
-}
-
-func (m *MultiPhaseReq) GetDelay() float64 {
-	return engine.GetTime() - m.Phases[0].InitTime
-}
-
-func (m *MultiPhaseReq) GetServiceTime() float64 {
-	return m.Phases[m.Current].GetServiceTime()
-}
-
-type ForwardDecisionProcedure func(outQueues []engine.QueueInterface, req *MultiPhaseReq) int
-
-type gpCoreForwardDecisionProcedure func(p *GPCore, outQueues []engine.QueueInterface, req *MultiPhaseReq) int
-type QueueChooseProcedure func(inQueues []engine.QueueInterface) int
-
 type mpProcessor struct {
 	engine.Actor
 	reqDrain        blocks.RequestDrain
@@ -151,126 +71,6 @@ func (p *RTCMPProcessor) Run() {
 			log.Fatalf("Error: RTCMPProcessor received a non-multi-phase request")
 		}
 
-	}
-}
-
-type AXCore struct {
-	mpProcessor
-}
-
-// axCore main loop:
-//
-//	check in queue
-//	wait for the full service time of this phase
-//	check the coreid of the request to know which in queue to re-enqueue
-//	wait for the notification overhead time
-//
-// write to the outqueue at offset coreid to re-enqueue at the offloading core
-func (p *AXCore) Run() {
-	for {
-		req := p.ReadInQueue()
-		//logPrintf("AXCore: Read request %v", req)
-		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
-			curPhase := multiPhaseReq.Current
-			//logPrintf("AXCore: Starting phase %v", curPhase)
-			if _, exists := multiPhaseReq.Phases[curPhase].Devices[Accelerator]; exists {
-				// Accelerator is in the set
-				actualServiceTime := req.GetServiceTime() / p.speedup
-				p.Wait(actualServiceTime)
-				multiPhaseReq.Current++
-				//logPrintf("AXCore: Finished phase %v", curPhase)
-			} else {
-				log.Fatalf("Error: Accelerator is not in the set")
-			}
-			if multiPhaseReq.Current >= len(multiPhaseReq.Phases) {
-				log.Fatalf("Error: Accelerator cannot terminate a request")
-			}
-			// Forward to the outgoing queue
-			outQueueIdx := p.forwardFunc(p.GetOutQueues(), multiPhaseReq)
-			p.WriteOutQueueI(req, outQueueIdx)
-		} else {
-			// Handle non-multi-phase requests
-			log.Fatalf("Error: RTCMPProcessor received a non-multi-phase request")
-		}
-	}
-}
-
-// Block Until Success, Offloading Processor with three queues, one for each phase
-type GPCore struct {
-	mpProcessor
-	gpCoreForwardFunc gpCoreForwardDecisionProcedure
-	lastOutQueue      int
-	outboundMax       int
-	gpCoreIdx         int
-}
-
-// determine the idx of the queue to read from <- parameterizable (maybe we just have one queue)
-// check the in queue corresponding to that idx
-// wait for the full service time of this phase and increment the phase counter
-// get the index of the outqueue to queue into
-// if the index is nil
-// 	wait for the full service time
-// otherwise
-// enqueue the request into the returned outqueue
-
-func (p *GPCore) Run() {
-	for {
-	read_inqueue:
-		var req engine.ReqInterface
-		inQueueIdx := p.queueChooseFunc(p.GetInQueues())
-		if inQueueIdx == -1 {
-			// dequeue from first non-empty
-			req, inQueueIdx = p.ReadInQueues()
-			// fmt.Println("GPCore routine said no, so we ReadInQueues -- Read from inQueueIdx: ", inQueueIdx)
-		} else {
-			req = p.ReadInQueueI(inQueueIdx)
-		}
-		//fmt.Println("GPCore: Read from inQueueIdx: ", inQueueIdx)
-		//fmt.Println(req)
-		if multiPhaseReq, ok := req.(*MultiPhaseReq); ok {
-			curPhase := multiPhaseReq.Current
-		phase_exe:
-			if curPhase < len(multiPhaseReq.Phases) {
-				// Check if the device is in the set
-				if _, exists := multiPhaseReq.Phases[multiPhaseReq.Current].Devices[Processor]; exists {
-					// Processor is in the set
-					p.Wait(multiPhaseReq.GetServiceTime())
-					multiPhaseReq.Current++
-					multiPhaseReq.lastGPCoreIdx = p.gpCoreIdx
-					//fmt.Printf("GPCore: Finished phase %v\n", curPhase)
-				} else {
-					log.Fatalf("Error: Processor is not in the set")
-				}
-
-				// Check if We just finished the last phase
-				if multiPhaseReq.Current >= len(multiPhaseReq.Phases) {
-					//fmt.Println("GPCore: Last phase, terminating request")
-					p.reqDrain.TerminateReq(req)
-					goto read_inqueue
-				}
-
-				// Forward to the outgoing queue
-				outQueueIdx := p.gpCoreForwardFunc(p, p.GetOutQueues(), multiPhaseReq)
-				if outQueueIdx == -1 {
-					//fmt.Printf("Waiting for the full service time for phase %v\n", multiPhaseReq.Current)
-					p.Wait(multiPhaseReq.GetServiceTime())
-					multiPhaseReq.Current++
-					goto phase_exe
-				} else {
-					//fmt.Printf("Enqueueing phase %v into outQueueIdx: %v\n", multiPhaseReq.Current, outQueueIdx)
-					p.Wait(p.offloadCost)
-					p.WriteOutQueueI(req, outQueueIdx)
-				}
-			} else {
-				// Last phase, terminate the request
-				log.Fatalf("Error: Received a request that has already completed all phases")
-			}
-		} else {
-			// Handle non-multi-phase requests
-			//fmt.Println(multiPhaseReq)
-			log.Fatalf("Error: NaiveOffloadingProcessor received a non-multi-phase request")
-
-		}
 	}
 }
 
@@ -353,16 +153,8 @@ func multi_gpcore_multi_axcore_prefn_centralized_axfn_centralized_postfn_returnt
 	g.AddOutQueue(q)
 
 	ax_q := blocks.NewQueue()
-	post_q := blocks.NewQueue()
 
-	for j := 0; j < num_accelerators; j++ {
-		axCore := &AXCore{}
-		axCore.forwardFunc = forwardToOffloader
-		axCore.speedup = speedup
-		axCore.AddInQueue(ax_q)
-		axCore.AddOutQueue(post_q)
-		engine.RegisterActor(axCore)
-	}
+	var post_qs = make([]engine.QueueInterface, num_cores)
 
 	for i := 0; i < num_cores; i++ {
 		gpCore := &GPCore{}
@@ -370,11 +162,23 @@ func multi_gpcore_multi_axcore_prefn_centralized_axfn_centralized_postfn_returnt
 		gpCore.queueChooseFunc = firstNonEmptyQueue
 		gpCore.gpCoreForwardFunc = tryAxCoreOutqueueThenFallback
 		gpCore.gpCoreIdx = i
-		gpCore.AddInQueue(post_q)
+		post_qs[i] = blocks.NewQueue()
+		gpCore.AddInQueue(post_qs[i])
 		gpCore.AddOutQueue(ax_q)
 		gpCore.AddInQueue(q)
 		gpCore.SetReqDrain(stats)
 		engine.RegisterActor(gpCore)
+	}
+
+	for j := 0; j < num_accelerators; j++ {
+		axCore := &AXCore{}
+		axCore.forwardFunc = forwardToOffloader
+		axCore.speedup = speedup
+		for i := 0; i < num_cores; i++ {
+			axCore.AddOutQueue(post_qs[i])
+		}
+		axCore.AddInQueue(ax_q)
+		engine.RegisterActor(axCore)
 	}
 
 	engine.RegisterActor(g)
@@ -414,6 +218,9 @@ func main() {
 	}
 	if *topo == 3 {
 		multi_gpcore_multi_axcore_multi_centralized(*duration, *speedup, *num_cores, *num_accelerators, *bufferSize, *lambda, *mu, *genType, *phase_one_ratio, *phase_two_ratio, *phase_three_ratio)
+	}
+	if *topo == 4 {
+		multi_gpcore_multi_axcore_prefn_centralized_axfn_centralized_postfn_returntosender(*duration, *speedup, *num_cores, *num_accelerators, *bufferSize, *lambda, *mu, *genType, *phase_one_ratio, *phase_two_ratio, *phase_three_ratio)
 	}
 
 }
