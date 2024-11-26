@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/neel-patel-1/xmp_sched_sim/engine"
@@ -13,6 +14,7 @@ type QueueChooseProcedure func(inQueues []engine.QueueInterface) int
 func forwardToOffloader(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
 	// re-enqueue at the offloading gpCore
 	outQueueIdx := req.lastGPCoreIdx
+	fmt.Printf("Forwarding to offloader %d", outQueueIdx)
 	return outQueueIdx
 }
 
@@ -24,17 +26,20 @@ func forwardToCentralized(outQueues []engine.QueueInterface, req *MultiPhaseReq)
 // Fully Connected Network With Queue Indices Selected According to topology specified in multi_gpcore_multi_axcore_three_phase
 func forwardToCentralizedPostProcThreePhase(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
 	// re-enqueue at the centralized processor
+	// fmt.Printf("Forwarding to centralized post proc")
 	return 0
 }
 
 func forwardToCentralizedPreProcThreePhase(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
 	// re-enqueue at the centralized processor
+	// fmt.Printf("Forwarding to centralized")
 	return 1
 }
 
 func forwardToOffloaderThreePhase(outQueues []engine.QueueInterface, req *MultiPhaseReq) int {
 	// re-enqueue at the offloading gpCore
 	outQueueIdx := req.lastGPCoreIdx + 2
+	// fmt.Printf("Forwarding to offloader %d", outQueueIdx)
 	return outQueueIdx
 }
 

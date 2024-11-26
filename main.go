@@ -208,6 +208,7 @@ func multi_gpcore_multi_axcore_three_phase(duration float64, speedup float64,
 	} else if genType == 3 {
 		g = blocks.NewMBRandGenerator(lambda, 1, 1000*(1/mu-0.999), 0.999)
 	}
+	// g = blocks.NewDDGenerator(1/lambda, 1/mu)
 	g.SetCreator(&ThreePhaseReqCreator{phase_one_ratio: phase_one_ratio, phase_two_ratio: phase_two_ratio, phase_three_ratio: phase_three_ratio})
 	q := blocks.NewQueue()
 	c_post_q := blocks.NewQueue()
@@ -225,6 +226,7 @@ func multi_gpcore_multi_axcore_three_phase(duration float64, speedup float64,
 		gpCore.gpCoreIdx = i
 		post_qs[i] = blocks.NewQueue()
 		gpCore.AddInQueue(post_qs[i])
+		gpCore.AddInQueue(c_post_q)
 		gpCore.AddOutQueue(ax_q)
 		gpCore.AddInQueue(q)
 		gpCore.SetReqDrain(stats)
@@ -303,12 +305,15 @@ func main() {
 
 	if *axcore_notify_recipient == 0 {
 		axCoreForwardFunc = forwardToCentralizedPostProcThreePhase
+		fmt.Printf("axCoreForwardFunc: %v\n", axCoreForwardFunc)
 	}
 	if *axcore_notify_recipient == 1 {
 		axCoreForwardFunc = forwardToCentralizedPreProcThreePhase
+		fmt.Printf("axCoreForwardFunc: %v\n", axCoreForwardFunc)
 	}
 	if *axcore_notify_recipient == 2 {
 		axCoreForwardFunc = forwardToOffloaderThreePhase
+		fmt.Printf("axCoreForwardFunc: %v\n", axCoreForwardFunc)
 	}
 
 	if *gpcore_input_queue_selector == 0 {

@@ -1,6 +1,8 @@
 package main
 
-import "log"
+import (
+	"log"
+)
 
 type AXCore struct {
 	mpProcessor
@@ -35,6 +37,7 @@ func (p *AXCore) Run() {
 			}
 			// Forward to the outgoing queue
 			outQueueIdx := p.forwardFunc(p.GetOutQueues(), multiPhaseReq)
+			// fmt.Println(p.GetOutQueues())
 			p.WriteOutQueueI(req, outQueueIdx)
 		} else {
 			// Handle non-multi-phase requests
